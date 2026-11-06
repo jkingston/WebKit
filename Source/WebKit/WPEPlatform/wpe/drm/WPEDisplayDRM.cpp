@@ -299,7 +299,7 @@ static std::unique_ptr<WPE::DRM::Plane> choosePlaneForCrtc(int fd, WPE::DRM::Pla
     return nullptr;
 }
 
-static gboolean wpeDisplayDRMSetup(WPEDisplayDRM* displayDRM, const char* deviceName, GError** error)
+static gboolean wpeDisplayDRMSetup(WPEDisplayDRM* displayDRM, const char* deviceName, int deviceFD, GError** error)
 {
     RefPtr<struct udev> udev = adoptRef(udev_new());
     if (!udev) {
@@ -309,7 +309,20 @@ static gboolean wpeDisplayDRMSetup(WPEDisplayDRM* displayDRM, const char* device
 
     auto session = WPE::DRM::Session::create();
     DisplayDevice displayDevice;
-    if (!deviceName) {
+    if (deviceFD >= 0) {
+        if (!deviceName) {
+            g_set_error_literal(error, WPE_DISPLAY_ERROR, WPE_DISPLAY_ERROR_CONNECTION_FAILED, "DRM device name is required with a pre-opened fd");
+            return FALSE;
+        }
+        int fd = fcntl(deviceFD, F_DUPFD_CLOEXEC, 3);
+        if (fd < 0) {
+            g_set_error_literal(error, WPE_DISPLAY_ERROR, WPE_DISPLAY_ERROR_CONNECTION_FAILED, "Failed to duplicate DRM device fd");
+            return FALSE;
+        }
+        WTF::UnixFileDescriptor unixFd(fd, WTF::UnixFileDescriptor::Adopt);
+        auto drmDevice = createDisplayDevice(unixFd, deviceName);
+        displayDevice = { WTF::move(unixFd), WTF::move(drmDevice) };
+    } else if (!deviceName) {
         displayDevice = findTargetDevice(udev.get(), session->seatID());
         if (displayDevice.isNull()) {
             g_set_error_literal(error, WPE_DISPLAY_ERROR, WPE_DISPLAY_ERROR_CONNECTION_FAILED, "No suitable DRM device found");
@@ -436,7 +449,7 @@ static gboolean wpeDisplayDRMSetup(WPEDisplayDRM* displayDRM, const char* device
 
 static gboolean wpeDisplayDRMConnect(WPEDisplay* display, GError** error)
 {
-    return wpeDisplayDRMSetup(WPE_DISPLAY_DRM(display), nullptr, error);
+    return wpeDisplayDRMSetup(WPE_DISPLAY_DRM(display), nullptr, -1, error);
 }
 
 static WPEView* wpeDisplayDRMCreateView(WPEDisplay* display)
@@ -567,7 +580,27 @@ WPEDisplay* wpe_display_drm_new(void)
 gboolean wpe_display_drm_connect(WPEDisplayDRM* display, const char* name, GError** error)
 {
     g_return_val_if_fail(WPE_IS_DISPLAY_DRM(display), FALSE);
-    return wpeDisplayDRMSetup(display, name, error);
+    return wpeDisplayDRMSetup(display, name, -1, error);
+}
+
+/**
+ * wpe_display_drm_connect_fd:
+ * @display: a #WPEDisplayDRM
+ * @fd: a pre-opened DRM device descriptor
+ * @name: the DRM device node name represented by @fd
+ * @error: return location for error or %NULL to ignore
+ *
+ * Connect to @name using a duplicate of @fd. The caller retains ownership of
+ * @fd and may close it after this function returns.
+ *
+ * Returns: %TRUE if connection succeeded, or %FALSE in case of error.
+ */
+gboolean wpe_display_drm_connect_fd(WPEDisplayDRM* display, int fd, const char* name, GError** error)
+{
+    g_return_val_if_fail(WPE_IS_DISPLAY_DRM(display), FALSE);
+    g_return_val_if_fail(fd >= 0, FALSE);
+    g_return_val_if_fail(name, FALSE);
+    return wpeDisplayDRMSetup(display, name, fd, error);
 }
 
 /**

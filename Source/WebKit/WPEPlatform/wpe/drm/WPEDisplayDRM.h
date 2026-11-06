@@ -54,6 +54,10 @@ WPE_API WPEDisplay         *wpe_display_drm_new                (void);
 WPE_API gboolean            wpe_display_drm_connect            (WPEDisplayDRM *display,
                                                                 const char    *name,
                                                                 GError       **error);
+WPE_API gboolean            wpe_display_drm_connect_fd         (WPEDisplayDRM *display,
+                                                                int            fd,
+                                                                const char    *name,
+                                                                GError       **error);
 WPE_API struct gbm_device  *wpe_display_drm_get_device         (WPEDisplayDRM *display);
 WPE_API gboolean            wpe_display_drm_supports_atomic    (WPEDisplayDRM *display);
 WPE_API gboolean            wpe_display_drm_supports_modifiers (WPEDisplayDRM *display);
