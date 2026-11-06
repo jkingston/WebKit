@@ -68,9 +68,9 @@ AcceleratedBackingStore::AcceleratedBackingStore(WebPageProxy& webPage, WPEView*
     })
     , m_legacyMainFrameProcess(webPage.legacyMainFrameProcess())
 {
-    g_signal_connect(m_wpeView.get(), "buffer-rendered", G_CALLBACK(+[](WPEView*, WPEBuffer*, gpointer userData) {
+    g_signal_connect(m_wpeView.get(), "buffer-rendered", G_CALLBACK(+[](WPEView*, WPEBuffer* buffer, gpointer userData) {
         auto& backingStore = *static_cast<AcceleratedBackingStore*>(userData);
-        backingStore.bufferRendered();
+        backingStore.bufferRendered(buffer);
     }), this);
     g_signal_connect(m_wpeView.get(), "buffer-released", G_CALLBACK(+[](WPEView*, WPEBuffer* buffer, gpointer userData) {
         auto& backingStore = *static_cast<AcceleratedBackingStore*>(userData);
@@ -278,6 +278,16 @@ Expected<Ref<ViewSnapshot>, String> AcceleratedBackingStore::takeSnapshot(std::o
 
 void AcceleratedBackingStore::renderPendingBuffer()
 {
+    // Visibility reaches the WebProcess asynchronously. A frame may already
+    // be in flight after WPEView was synchronously unmapped; acknowledge and
+    // discard it instead of allowing hidden web content to replace a trusted
+    // UI-process buffer submitted to the same platform view.
+    if (!wpe_view_get_mapped(m_wpeView.get())) {
+        frameDone();
+        m_pendingBuffer = nullptr;
+        m_pendingDamageRects = { };
+        return;
+    }
     if (!wpe_view_get_toplevel(m_wpeView.get()))
         return;
 
@@ -304,9 +314,10 @@ void AcceleratedBackingStore::frameDone()
         legacyMainFrameProcess->send(Messages::AcceleratedSurface::FrameDone(), m_surfaceID);
 }
 
-void AcceleratedBackingStore::bufferRendered()
+void AcceleratedBackingStore::bufferRendered(WPEBuffer* buffer)
 {
-    frameDone();
+    if (m_bufferIDs.contains(buffer))
+        frameDone();
 }
 
 void AcceleratedBackingStore::bufferReleased(WPEBuffer* buffer)

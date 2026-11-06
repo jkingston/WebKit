@@ -93,7 +93,7 @@ private:
     void frame(uint64_t bufferID, Rects&&, WTF::UnixFileDescriptor&&);
     void frameDone();
     void renderPendingBuffer();
-    void bufferRendered();
+    void bufferRendered(WPEBuffer*);
     void bufferReleased(WPEBuffer*);
     void toplevelChanged();
 
