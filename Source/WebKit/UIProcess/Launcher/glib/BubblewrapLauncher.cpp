@@ -747,9 +747,8 @@ static bool shouldUnshareNetwork(ProcessLauncher::ProcessType processType, Vecto
     }
 #endif
 
-    // Otherwise, only the network process should have network access. If we are the network
-    // process, then we are not sandboxed and have already bailed out before this point.
-    return true;
+    // Only the network process retains the host network namespace.
+    return processType != ProcessLauncher::ProcessType::Network;
 }
 
 static std::optional<CString> directoryContainingDBusSocket(const char* dbusAddress)
@@ -791,12 +790,6 @@ static void addExtraPaths(const HashMap<CString, SandboxPermission>& paths, Vect
 GRefPtr<GSubprocess> bubblewrapSpawn(GSubprocessLauncher* launcher, const ProcessLauncher::LaunchOptions& launchOptions, XDGDBusProxy& dbusProxy, Vector<char*>& argv, GError **error)
 {
     ASSERT(launcher);
-
-    // For now we are just considering the network process trusted as it
-    // requires a lot of access but doesn't execute arbitrary code like
-    // the WebProcess where our focus lies.
-    if (launchOptions.processType == ProcessLauncher::ProcessType::Network)
-        return adoptGRef(g_subprocess_launcher_spawnv(launcher, argv.span().data(), error));
 
     const char* runDir = g_get_user_runtime_dir();
     Vector<CString> sandboxArgs = {
@@ -862,6 +855,13 @@ GRefPtr<GSubprocess> bubblewrapSpawn(GSubprocessLauncher* launcher, const Proces
     }
 
     addExtraPaths(launchOptions.extraSandboxPaths, sandboxArgs);
+
+    if (launchOptions.processType == ProcessLauncher::ProcessType::Network) {
+        const char* profileRoot = g_getenv("BRICK_CAPTIVE_PROFILE_ROOT");
+        if (!profileRoot || !g_path_is_absolute(profileRoot))
+            g_error("A trusted captive profile root is required");
+        sandboxArgs.appendList<CString>({ "--bind", profileRoot, profileRoot });
+    }
 
     if (launchOptions.processType == ProcessLauncher::ProcessType::DBusProxy) {
         sandboxArgs.appendList<CString>({
@@ -953,7 +953,6 @@ GRefPtr<GSubprocess> bubblewrapSpawn(GSubprocessLauncher* launcher, const Proces
         bindSndio(sandboxArgs);
         bindFonts(sandboxArgs);
         bindGStreamerData(sandboxArgs);
-        bindOpenGL(sandboxArgs);
 
         // Although cameras can be managed via the DesktopPortal, we still need v4l2 for video decoding.
         bindV4l(sandboxArgs);
@@ -971,6 +970,9 @@ GRefPtr<GSubprocess> bubblewrapSpawn(GSubprocessLauncher* launcher, const Proces
 #endif
         dbusProxy.launch(launchOptions);
     } else {
+        if (launchOptions.processType == ProcessLauncher::ProcessType::GPU)
+            bindOpenGL(sandboxArgs);
+
         // Only X11 users need this for XShm which is only the Web process.
         sandboxArgs.append("--unshare-ipc");
     }

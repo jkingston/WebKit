@@ -27,6 +27,9 @@
 #include "GBMDevice.h"
 
 #if USE(GBM)
+#include <cerrno>
+#include <climits>
+#include <cstdlib>
 #include <fcntl.h>
 #include <gbm.h>
 #include <unistd.h>
@@ -39,7 +42,18 @@ namespace WebCore {
 RefPtr<GBMDevice> GBMDevice::create(const CString& filename)
 {
     RELEASE_ASSERT(isMainThread());
-    auto fd = UnixFileDescriptor { open(filename.data(), O_RDWR | O_CLOEXEC), UnixFileDescriptor::Adopt };
+    UnixFileDescriptor fd;
+    if (const char* brokerFDString = getenv("BRICK_CAPTIVE_GPU_DRM_FD")) {
+        char* end = nullptr;
+        errno = 0;
+        long brokerFDValue = strtol(brokerFDString, &end, 10);
+        if (!errno && brokerFDValue >= 0 && brokerFDValue <= INT_MAX && end && !*end) {
+            fd = UnixFileDescriptor { fcntl(static_cast<int>(brokerFDValue), F_DUPFD_CLOEXEC, 3), UnixFileDescriptor::Adopt };
+            unsetenv("BRICK_CAPTIVE_GPU_DRM_FD");
+            close(static_cast<int>(brokerFDValue));
+        }
+    } else
+        fd = UnixFileDescriptor { open(filename.data(), O_RDWR | O_CLOEXEC), UnixFileDescriptor::Adopt };
     if (!fd) {
         WTFLogAlways("Failed to open DRM node %s: %s", filename.data(), safeStrerror(errno).data());
         return nullptr;

@@ -234,6 +234,26 @@ void ProcessLauncher::launchProcess()
     GRefPtr<GSubprocessLauncher> launcher = adoptGRef(g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_INHERIT_FDS));
     int webkitClientSocketValue = webkitSocketPair.client.release();
     g_subprocess_launcher_take_fd(launcher.get(), webkitClientSocketValue, webkitClientSocketValue);
+    g_subprocess_launcher_unsetenv(launcher.get(), "BRICK_CAPTIVE_GPU_DRM_FD");
+    g_subprocess_launcher_unsetenv(launcher.get(), "BRICK_CAPTIVE_PROFILE_ROOT");
+
+#if ENABLE(GPU_PROCESS) && USE(GBM)
+    if (m_launchOptions.processType == ProcessLauncher::ProcessType::GPU) {
+        static constexpr int gpuDRMTargetFD = 198;
+        const char* gpuDRMFDString = g_getenv("BRICK_CAPTIVE_GPU_DRM_FD");
+        char* end = nullptr;
+        errno = 0;
+        gint64 gpuDRMFDValue = gpuDRMFDString ? g_ascii_strtoll(gpuDRMFDString, &end, 10) : -1;
+        if (errno || gpuDRMFDValue < 0 || gpuDRMFDValue > G_MAXINT || !end || *end)
+            g_error("A trusted GPU DRM fd is required");
+        int gpuDRMFD = fcntl(static_cast<int>(gpuDRMFDValue), F_DUPFD_CLOEXEC, 3);
+        if (gpuDRMFD < 0)
+            g_error("Failed to duplicate trusted GPU DRM fd: %s", g_strerror(errno));
+        // Bubblewrap 0.13 passes unknown inherited fds to the final executable; only its monitor and PID 1 close their copies.
+        g_subprocess_launcher_setenv(launcher.get(), "BRICK_CAPTIVE_GPU_DRM_FD", "198", TRUE);
+        g_subprocess_launcher_take_fd(launcher.get(), gpuDRMFD, gpuDRMTargetFD);
+    }
+#endif
 
 #if USE(SYSPROF_CAPTURE)
     UnixFileDescriptor sysprofFd;
@@ -253,7 +273,10 @@ void ProcessLauncher::launchProcess()
     GRefPtr<GSubprocess> process;
 
 #if OS(LINUX)
-    bool sandboxEnabled = m_launchOptions.extraInitializationData.get<HashTranslatorASCIILiteral>("enable-sandbox"_s) == "true"_s;
+    // WebKit only annotates Web launch options with enable-sandbox. Brick's
+    // single captive-browser path also requires GPU and Network isolation.
+    bool sandboxEnabled = m_launchOptions.processType != ProcessLauncher::ProcessType::Web
+        || m_launchOptions.extraInitializationData.get<HashTranslatorASCIILiteral>("enable-sandbox"_s) == "true"_s;
 
     if (sandboxEnabled && isInsideFlatpak() && isFlatpakSpawnUsable())
         process = flatpakSpawn(launcher.get(), m_launchOptions, argv, webkitClientSocketValue, &error.outPtr());
